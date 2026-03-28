@@ -1,0 +1,14 @@
+# Build artifacts
+firmware/build/
+sim_config.bin
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
