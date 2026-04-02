@@ -7,7 +7,7 @@
 #ifdef SIM_BUILD
     #define MEMORY_BARRIER() __sync_synchronize()
 #else
-    #define MEMORY_BARRIER() __dmb()
+    #define MEMORY_BARRIER() __asm volatile ("dmb" ::: "memory")
 #endif
 
 void ring_init(ring_buffer_t *rb)
