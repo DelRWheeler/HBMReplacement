@@ -2,6 +2,7 @@
 #include "../config/board_pins.h"
 
 #include "pico/stdlib.h"
+#include "pico/stdio_usb.h"
 #include "pico/multicore.h"
 #include "hardware/spi.h"
 #include "hardware/uart.h"
@@ -16,7 +17,7 @@
 /*
  * RP2040 Hardware HAL
  *
- * Serial: UART1 -> RS485 Isolator 3 Click (half-duplex via DE pin)
+ * Serial: UART1 -> RS485 Isolator 3 Click (full-duplex isolated, ADM2867E)
  * ADC:    SPI0  -> MCP3561 on Load Cell 6 Click
  * Config: Last flash sector (4KB)
  * Cores:  RP2040 multicore
@@ -71,26 +72,28 @@
 /* Serial (RS485 via UART1)                                          */
 /* ================================================================ */
 
-static inline void rs485_driver_enable(void)
-{
-    /* Full-duplex RS485: driver is always on.
-     * Separate TX (A/B) and RX (Y/Z) pairs — no bus contention. */
-    gpio_put(PIN_RS485_DE, 1);
-}
-
 int hal_serial_init(uint32_t baudrate)
 {
+    /* DE HIGH = transmitter enabled, RE LOW = receiver enabled.
+     * For full-duplex, both are asserted simultaneously. */
+    gpio_init(PIN_RS485_DE);
+    gpio_set_dir(PIN_RS485_DE, GPIO_OUT);
+    gpio_put(PIN_RS485_DE, 1);  /* Enable driver (TX) */
+
+    gpio_init(PIN_RS485_RE);
+    gpio_set_dir(PIN_RS485_RE, GPIO_OUT);
+    gpio_put(PIN_RS485_RE, 0);  /* Enable receiver (RX, active low) */
+
+    gpio_init(PIN_RS485_INV);
+    gpio_set_dir(PIN_RS485_INV, GPIO_OUT);
+    gpio_put(PIN_RS485_INV, 1);  /* Invert receiver polarity */
+
     /* Init UART */
     uart_init(UART_PORT, baudrate);
     gpio_set_function(PIN_UART_TX, GPIO_FUNC_UART);
     gpio_set_function(PIN_UART_RX, GPIO_FUNC_UART);
     uart_set_format(UART_PORT, UART_DATA_BITS, UART_STOP_BITS, UART_PARITY_NONE);
     uart_set_fifo_enabled(UART_PORT, true);
-
-    /* DE pin — enable driver permanently for full-duplex RS485 */
-    gpio_init(PIN_RS485_DE);
-    gpio_set_dir(PIN_RS485_DE, GPIO_OUT);
-    rs485_driver_enable();
 
     return 0;
 }
@@ -192,6 +195,24 @@ int hal_adc_init(void)
     gpio_set_dir(PIN_ADC_DRDY, GPIO_IN);
     gpio_pull_up(PIN_ADC_DRDY);
 
+    /* Enable excitation voltage (active LOW on PWM pin).
+     * Use gpio_set_oeover to force output enable while driving low,
+     * ensuring a strong pull to ground against any external pull-up. */
+    gpio_init(PIN_EXC_EN);
+    gpio_set_dir(PIN_EXC_EN, GPIO_OUT);
+    gpio_put(PIN_EXC_EN, 0);
+    gpio_set_drive_strength(PIN_EXC_EN, GPIO_DRIVE_STRENGTH_12MA);
+
+    /* Debug: blink LED 3 times to confirm we reached EXC_EN init */
+    gpio_init(PIN_LED);
+    gpio_set_dir(PIN_LED, GPIO_OUT);
+    for (int i = 0; i < 3; i++) {
+        gpio_put(PIN_LED, 1);
+        busy_wait_ms(200);
+        gpio_put(PIN_LED, 0);
+        busy_wait_ms(200);
+    }
+
     /* Reset pin */
     gpio_init(PIN_ADC_RST);
     gpio_set_dir(PIN_ADC_RST, GPIO_OUT);
@@ -286,8 +307,15 @@ int hal_config_write(const uint8_t *buf, size_t len)
 void hal_init(void)
 {
     stdio_init_all();
-    /* Small delay to let USB CDC enumerate (for debug printf) */
-    sleep_ms(100);
+    /* Wait up to 5 seconds for USB CDC host to connect */
+    for (int i = 0; i < 50; i++) {
+        if (stdio_usb_connected())
+            break;
+        sleep_ms(100);
+    }
+    sleep_ms(200);
+    printf("[hal] Pico booted, CDC %s\n",
+           stdio_usb_connected() ? "connected" : "no host");
 }
 
 void hal_sleep_ms(uint32_t ms)

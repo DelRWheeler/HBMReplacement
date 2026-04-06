@@ -66,9 +66,9 @@ static void core0_adc_loop(void)
                 ring_push(&ring, sample);
             }
         }
-        /* Tight loop — no sleep in real firmware.
+        /* Short sleep to yield CPU for USB CDC background task.
          * In sim, hal_adc_data_ready() rate-limits us. */
-        hal_sleep_ms(0); /* yield in sim */
+        hal_sleep_ms(1);
     }
 }
 
@@ -84,12 +84,18 @@ static void core1_comms_loop(void)
         /* Read incoming RS485 data */
         int rx_len = hal_serial_read(rx_buf, sizeof(rx_buf));
         if (rx_len > 0) {
+            printf("[rx] %d bytes:", rx_len);
+            for (int i = 0; i < rx_len; i++) printf(" %02X", rx_buf[i]);
+            printf("\n");
             fit7_feed(&protocol, rx_buf, rx_len);
         }
 
         /* Send any pending command responses */
         int rsp_len = fit7_get_response(&protocol, tx_buf, sizeof(tx_buf));
         if (rsp_len > 0) {
+            printf("[tx] %d bytes:", rsp_len);
+            for (int i = 0; i < rsp_len; i++) printf(" %02X", tx_buf[i]);
+            printf("\n");
             hal_serial_write(tx_buf, rsp_len);
         }
 
@@ -120,25 +126,51 @@ int main(void)
 
     /* Initialize HAL */
     hal_init();
+    printf("[main] HAL initialized\n");
 
     /* Initialize config store */
     config_init();
+    printf("[main] Config initialized\n");
 
     /* Initialize ring buffer */
     ring_init(&ring);
 
     /* Initialize ADC */
+    printf("[main] Initializing ADC...\n");
     hal_adc_init();
+    printf("[main] ADC initialized\n");
 
     /* Initialize serial port (RS485) */
+    printf("[main] Initializing serial...\n");
     if (hal_serial_init(38400) != 0) {
         printf("[main] Failed to initialize serial port\n");
         return 1;
     }
+    printf("[main] Serial initialized\n");
 
     /* Initialize protocol engine */
     fit7_init(&protocol, &ring);
     fit7_set_filter_callback(&protocol, on_filter_change);
+    printf("[main] Protocol initialized\n");
+
+    /* Diagnostic: send a known pattern on RS485 TX */
+    printf("[main] Sending test pattern on UART TX...\n");
+    uint8_t test_msg[] = "HELLO\r\n";
+    hal_serial_write(test_msg, 7);
+    printf("[main] Test pattern sent\n");
+
+    /* Check for any data already in UART RX */
+    hal_sleep_ms(100);
+    uint8_t rxtest[64];
+    int rxn = hal_serial_read(rxtest, sizeof(rxtest));
+    printf("[main] UART RX buffer: %d bytes", rxn);
+    if (rxn > 0) {
+        printf(":");
+        for (int i = 0; i < rxn; i++) printf(" %02X", rxtest[i]);
+    }
+    printf("\n");
+
+    printf("[main] Launching core1\n");
 
     /* Launch Core 1 (comms) on a separate thread/core */
     hal_launch_core1(core1_comms_loop);
