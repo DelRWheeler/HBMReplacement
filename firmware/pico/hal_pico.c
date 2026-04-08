@@ -95,6 +95,9 @@ int hal_serial_init(uint32_t baudrate)
     uart_set_format(UART_PORT, UART_DATA_BITS, UART_STOP_BITS, UART_PARITY_NONE);
     uart_set_fifo_enabled(UART_PORT, true);
 
+    /* Invert TX output to match RS485 line polarity (A/B swap compensation) */
+    gpio_set_outover(PIN_UART_TX, GPIO_OVERRIDE_INVERT);
+
     return 0;
 }
 
@@ -195,13 +198,12 @@ int hal_adc_init(void)
     gpio_set_dir(PIN_ADC_DRDY, GPIO_IN);
     gpio_pull_up(PIN_ADC_DRDY);
 
-    /* Enable excitation voltage (active LOW on PWM pin).
-     * Use gpio_set_oeover to force output enable while driving low,
-     * ensuring a strong pull to ground against any external pull-up. */
+    /* PWM pin (GPIO2) is NOT excitation enable — it connects to the
+     * MCP3561 SYN/sync pin on the Load Cell 6 Click board.
+     * Excitation is always-on from the board's power rail.
+     * Configure as input to avoid bus contention. */
     gpio_init(PIN_EXC_EN);
-    gpio_set_dir(PIN_EXC_EN, GPIO_OUT);
-    gpio_put(PIN_EXC_EN, 0);
-    gpio_set_drive_strength(PIN_EXC_EN, GPIO_DRIVE_STRENGTH_12MA);
+    gpio_set_dir(PIN_EXC_EN, GPIO_IN);
 
     /* Debug: blink LED 3 times to confirm we reached EXC_EN init */
     gpio_init(PIN_LED);
@@ -230,6 +232,23 @@ int hal_adc_init(void)
     mcp3561_write_reg(MCP3561_REG_CONFIG3, MCP3561_CONFIG3_DEFAULT);
     mcp3561_write_reg(MCP3561_REG_IRQ, MCP3561_IRQ_DEFAULT);
     mcp3561_write_reg(MCP3561_REG_MUX, MCP3561_MUX_DEFAULT);
+
+    /* SPI diagnostic: read back all config registers */
+    printf("[adc] SPI readback:\n");
+    printf("[adc]   CONFIG0=0x%02X (expect 0x%02X)\n",
+           mcp3561_read_reg(MCP3561_REG_CONFIG0), MCP3561_CONFIG0_DEFAULT);
+    printf("[adc]   CONFIG1=0x%02X (expect 0x%02X)\n",
+           mcp3561_read_reg(MCP3561_REG_CONFIG1), (current_osr_bits << 2));
+    printf("[adc]   CONFIG2=0x%02X (expect 0x%02X)\n",
+           mcp3561_read_reg(MCP3561_REG_CONFIG2), MCP3561_CONFIG2_DEFAULT);
+    printf("[adc]   CONFIG3=0x%02X (expect 0x%02X)\n",
+           mcp3561_read_reg(MCP3561_REG_CONFIG3), MCP3561_CONFIG3_DEFAULT);
+    printf("[adc]   IRQ=0x%02X (expect 0x%02X)\n",
+           mcp3561_read_reg(MCP3561_REG_IRQ), MCP3561_IRQ_DEFAULT);
+    printf("[adc]   MUX=0x%02X (expect 0x%02X)\n",
+           mcp3561_read_reg(MCP3561_REG_MUX), MCP3561_MUX_DEFAULT);
+    printf("[adc]   DRDY pin=%d\n", gpio_get(PIN_ADC_DRDY));
+    printf("[adc]   PWM/SYN pin=%d\n", gpio_get(PIN_EXC_EN));
 
     return 0;
 }
